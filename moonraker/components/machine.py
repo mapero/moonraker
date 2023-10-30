@@ -119,7 +119,8 @@ class Machine:
             "none": BaseProvider,
             "systemd_cli": SystemdCliProvider,
             "systemd_dbus": SystemdDbusProvider,
-            "supervisord_cli": SupervisordCliProvider
+            "supervisord_cli": SupervisordCliProvider,
+            "snapctl_cli": SnapCtlProvider
         }
         self.provider_type = config.get('provider', 'systemd_dbus')
         pclass = providers.get(self.provider_type)
@@ -1454,6 +1455,76 @@ class SupervisordCliProvider(BaseProvider):
         service_info["properties"] = dict(spv_config[section_name])
         return service_info
 
+class SnapCtlProvider(BaseProvider):
+    
+    async def initialize(self) -> None:
+        await self._detect_active_services()
+        if self.available_services:
+            svcs = list(self.available_services.keys())
+
+
+    async def _detect_active_services(self) -> None:
+        machine: Machine = self.server.lookup_component("machine")
+        try:
+            resp: str = await self.shell_cmd.exec_cmd(
+                "snapctl services"
+            )
+            lines = resp.split('\n')
+            # parse the snapctl output, extract app name
+            # Service            Startup  Current  Notes
+            # klipper.klippy     enabled  active   -
+            # klipper.moonraker  enabled  active   -
+            # and remove snap name prefix, e.g. klippper.
+            services = [line.split()[0].strip().split('.')[1] for line in lines[2:-1]]
+        except Exception:
+            services = []
+        for svc in services:
+            if machine.is_service_allowed(svc):
+                self.available_services[svc] = {
+                    'active_state': "unknown",
+                    'sub_state': "unknown"
+                }
+
+    async def shutdown(self) -> None:
+        await self._exec_sudo_command(f"systemctl {self.shutdown_action}")
+
+    async def reboot(self) -> None:
+        await self._exec_sudo_command("systemctl reboot")
+
+    async def do_service_action(self,
+                                action: str,
+                                service_name: str
+                                ) -> None:
+        
+        if action == "start":
+            await self.shell_cmd.exec_cmd(f"snapctl start {service_name}")
+        elif action == "stop":
+            await self.shell_cmd.exec_cmd(f"snapctl stop {service_name}")
+        elif action == "restart":
+            await self.shell_cmd.exec_cmd(f"snapctl restart {service_name}")
+        else:
+            raise self.server.error(f"Invalid service action: {action}")
+    
+    async def check_virt_status(self) -> Dict[str, Any]:
+        return {
+            'virt_type': "unknown",
+            'virt_identifier': "unknown"
+        }
+    
+    def is_service_available(self, service: str) -> bool:
+        return service in self.available_services
+
+    def get_available_services(self) -> Dict[str, Dict[str, str]]:
+        return self.available_services
+    
+    async def extract_service_info(
+        self,
+        service: str,
+        pid: int,
+        properties: Optional[List[str]] = None,
+        raw: bool = False
+    ) -> Dict[str, Any]:
+        return {}
 
 # Install validation
 INSTALL_VERSION = 1
